@@ -7,7 +7,6 @@ from pycognito import Cognito
 
 from edilkamin import constants
 from edilkamin.async_dispatch import syncable
-from edilkamin.utils import get_endpoint, get_headers
 
 
 class Power(Enum):
@@ -15,12 +14,25 @@ class Power(Enum):
     ON = 1
 
 
+cognito = Cognito(constants.USER_POOL_ID, constants.CLIENT_ID)
+
+
+def add_bearer_token(request: httpx.Request) -> httpx.Request:
+    cognito.check_token()
+    request.headers["Authorization"] = f"Bearer {cognito.access_token}"
+    return request
+
+
+client = httpx.AsyncClient(auth=add_bearer_token, base_url=constants.BACKEND_URL)
+
+
 def sign_in(username: str, password: str) -> str:
     """Sign in and return token."""
-    cognito = Cognito(constants.USER_POOL_ID, constants.CLIENT_ID, username=username)
-    cognito.authenticate(password)
-    user = cognito.get_user()
-    return user._metadata["access_token"]
+    if not cognito.access_token:
+        cognito.username = username
+        cognito.authenticate(password)
+
+    return cognito.access_token
 
 
 def format_mac(mac: str):
@@ -90,13 +102,13 @@ def discover_devices(convert=True) -> typing.Tuple[str]:
 @syncable
 async def device_info(token: str, mac: str) -> typing.Dict:
     """Retrieve device info for a given MAC address in the format `aabbccddeeff`."""
-    headers = get_headers(token)
+
     mac = format_mac(mac)
-    url = get_endpoint(f"device/{mac}/info")
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, headers=headers)
-        response.raise_for_status()
-        return response.json()
+    url = f"device/{mac}/info"
+
+    response = await client.get(url)
+    response.raise_for_status()
+    return response.json()
 
 
 @syncable
@@ -105,13 +117,11 @@ async def mqtt_command(token: str, mac_address: str, payload: typing.Dict) -> st
     Send a MQTT command to the device identified with the MAC address.
     Return the response string.
     """
-    headers = get_headers(token)
-    url = get_endpoint("mqtt/command")
+    url = "mqtt/command"
     data = {"mac_address": format_mac(mac_address), **payload}
-    async with httpx.AsyncClient() as client:
-        response = await client.put(url, json=data, headers=headers)
-        response.raise_for_status()
-        return response.json()
+    response = await client.put(url, json=data)
+    response.raise_for_status()
+    return response.json()
 
 
 @syncable
